@@ -1,7 +1,7 @@
 [project]
-name = "eu4_modding_tools"
-version = "0.5"
-description = "Various scripts for modding Europa Universalis 4."
+name = "utility_scripts"
+version = "0.1"
+description = "A collection of useful scripts, mainly for automating coding processes by utilizing LLMs in pre-configured workflows."
 
 readme = "README.md"
 authors = [{name = "Björn Gunnar Bryggman", email = "bjorn.bryggman@gmail.com"}]
@@ -17,8 +17,6 @@ classifiers = [
 
 requires-python = ">= 3.12"
 dependencies = [
-    "diffusers >= 0.29",
-    "huggingface-hub>=0.24.5",
     "instructor>=1.3.7",
     "openai >= 1.35.0",
     "python-dotenv >= 1.0.1",
@@ -35,7 +33,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/bjornbryggman/EU4-Modding-Tools.git"
+Repository = "https://github.com/bjornbryggman/utility_scripts.git"
 
 [tool.rye]
 managed = true
@@ -47,11 +45,6 @@ dev-dependencies = [
     "pytest-asyncio",
     "ruff",
 ]
-
-[tool.rye.scripts]
-"check:ruff" = "ruff ."
-"fix:ruff" = "ruff --fix ."
-"format:ruff" = "ruff format"
 
 [tool.pytest.ini_options]
 testpaths = ["*tests*"]
