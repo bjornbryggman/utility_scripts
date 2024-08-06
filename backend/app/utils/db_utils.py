@@ -9,7 +9,6 @@ creating the database schema and managing sessions.
 
 from collections.abc import Generator
 from contextlib import contextmanager
-
 from typing import Any
 
 import structlog
