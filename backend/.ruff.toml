@@ -1,0 +1,98 @@
+required-version = ">=0.5"
+target-version = "py312"
+line-length = 120
+indent-width = 4
+respect-gitignore = true
+output-format = "json"
+preview = false
+include = ["*.py", "*.pyi", "**/pyproject.toml"]
+exclude =["**/tests/**", "**/models.py"]
+force-exclude = true
+src = ["backend/*"]
+
+[format]
+indent-style = "space"
+docstring-code-format = true
+skip-magic-trailing-comma = true
+preview = true
+
+[lint]
+select = [
+    "ALL", 
+    "D213", 
+    "D400", 
+    "D407", 
+    "D408", 
+    "D409", 
+    "UP"
+    ]
+    
+ignore = [
+    "DOC502",
+    "D206",
+    "D212",
+    "D300",
+    "D417",
+    "COM812",
+    "COM819",
+    "E111",
+    "E114",
+    "E117",
+    "E265",
+    "FBT",
+    "ISC001",
+    "ISC002",
+    "S603",
+    "Q000",
+    "Q001",
+    "Q002",
+    "Q003",
+    "W191",
+]
+fixable = ["ALL"]
+task-tags = ["TODO"]
+
+[lint.flake8-boolean-trap]
+extend-allowed-calls = ["pydantic.Field"]
+
+[lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+
+[lint.flake8-copyright]
+author = "Björn Gunnar Bryggman"
+min-file-size = 1024
+
+[lint.flake8-pytest-style]
+raises-extend-require-match-for = ["requests.RequestException"]
+
+[lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[lint.flake8-type-checking]
+runtime-evaluated-base-classes = ["pydantic.BaseModel", "SQLModel"]
+runtime-evaluated-decorators = ["pydantic.validate_call", "attrs.define"]
+strict = true
+
+[lint.isort]
+extra-standard-library = ["path"]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "local-folder",
+]
+split-on-trailing-comma = false
+
+[lint.pep8-naming]
+classmethod-decorators = ["pydantic.validator"]
+
+[lint.pycodestyle]
+ignore-overlong-task-comments = true
+max-doc-length = 120
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.pylint]
+max-args = 7

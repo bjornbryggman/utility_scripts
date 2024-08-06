@@ -1,0 +1,47 @@
+# GitHub Actions is an automation tool that allows you to define workflows for your software projects. 
+# These workflows can automatically run tasks when certain events occur in your repository.
+
+# Workflow name.
+name: Development
+
+# Triggers.
+on:
+  # Runs when code is pushed to the "development" branch.
+  push:
+    branches:
+      - "development"
+  # Can be manually triggered.
+  workflow_dispatch:
+
+# Jobs.
+jobs:
+  dev:
+    # Runner.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # This step fetches your repository's code into the runner.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # This step install Python and initiates a virtual environment via Rye.
+      - name: Install Python via Rye (Python manager)
+        run: |
+          curl -sSf https://rye.astral.sh/get | RYE_VERSION="0.37.0" RYE_INSTALL_OPTION="--yes" bash
+          echo "$HOME/.rye/shims" >> $GITHUB_PATH
+
+      # This step installs the Python packages listed in pyproject.toml.
+      - name: Install Python packages
+        working-directory: ./backend
+        run: rye sync
+
+      # This step runs the Ruff Python linter & formatter.
+      - name: Run Ruff linter & formatter
+        working-directory: ./backend
+        run: |
+          rye run ruff check --fix-only --preview .
+          rye run ruff format .
+
+      # This step automatically commits changes back to the repository.
+      - uses: stefanzweifel/git-auto-commit-action@v5

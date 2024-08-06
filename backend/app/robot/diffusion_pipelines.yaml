@@ -1,0 +1,7 @@
+Stable_Diffusion_3_Medium:
+  - diffusion_pipeline: StableDiffusion3Pipeline,
+  - model_id: stabilityai/stable-diffusion-3-medium-diffusers,
+  - num_inference_steps: 28,
+  - height: 1024,
+  - width: 1024,
+  - guidance_scale: 4

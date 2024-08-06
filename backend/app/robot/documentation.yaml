@@ -1,0 +1,1054 @@
+module_documenter:
+    - system_prompt:
+        - role: >-
+            You are an expert Python developer and technical writer, specializing in creating clear, comprehensive, and PEP 257-compliant docstrings for Python modules.
+        
+        - task: >-
+            Your task is to analyze Python modules and generate detailed docstrings that explain the module's purpose and utility. You should maintain a consistent style and format across all docstrings.
+        
+        - limitations:
+            - Do not modify the actual code of the function.
+            - Stick to the information provided in the function; do not assume functionality that isn't explicitly stated.
+            - Do not include logging or raising exceptions as part of the descriptions as these are considered implicit necessities and should therefore always be included by default.
+
+        - final_note: Proceed step-by-step and do not shorten for brevity. Your performance will be monitored, and there is a large financial bonus to be had if you perform well. 
+
+    - assistant_prompt:
+        - template: |
+            """
+            MODULE_DOCUMENTATION_STRUCTURE:
+                <EXAMPLE>
+                """
+                [Insert a concise one-line description of the module (no more than 90 characters)]
+
+                [Insert a more descriptive paragraph that lists the main use cases and features of this module
+                (purpose and utility), as well as information regarding any important highlights. This paragraph can
+                be no longer than three rows, and each row may contain no more than 90 characters.]
+                """
+
+    - user_prompt: |
+        "
+        import re
+        from pathlib import Path
+
+        import structlog
+        from backend.app.utils.db_utils import session_scope
+        from sqlmodel import select
+
+        from app.database.models import Province, Terrain
+        from app.utils.file_utils import read_file
+
+        # Initialize logger for this module.
+        log = structlog.stdlib.get_logger(__name__)
+
+
+        # ======================================================#
+        #          Function for extracting province IDs         #
+        # ======================================================#
+
+
+        def parse_positions_file(input_file: Path, regex_pattern: str) -> None:
+            """
+            Parse the positions.txt file and update the database with Province entries.
+
+            Process:
+            -------
+            -------
+                - Reads the positions.txt file and extracts province definitions using a regular expression.
+                - Creates or updates Province entries in the database based on the extracted information.
+
+            Args:
+            ----
+            ----
+                - input_file (Path): The path to the positions.txt file to be parsed.
+                - regex_pattern (str): The regular expression pattern used to extract province definitions from the file.
+
+            Returns:
+            -------
+            -------
+                - None: This function does not return any value, but updates the database instead.
+
+            Exceptions:
+            ----------
+            ----------
+                - Exception: Raised for any unexpected errors during execution.
+                - OSError: Raised when an error occurs while reading the file.
+                - PermissionError: Raised when there is no permission to read the file.
+                - ValueError: Raised when invalid data is encountered during parsing.
+            """
+            try:
+                content = read_file(input_file)
+                provinces = re.findall(regex_pattern, content, re.DOTALL)
+                if not provinces:
+                    log.warning("No provinces found in %s.", input_file)
+
+                with session_scope() as session:
+                    for province_name, province_id, _province_data in provinces:
+                        province = Province(id=int(province_id), name=province_name.strip())
+                        session.add(province)
+
+            except (Exception, OSError, PermissionError, ValueError) as error:
+                log.exception("Error processing %s.", input_file, exc_info=error)
+                raise
+            else:
+                log.debug("Parsed %s provinces from %s.", len(provinces), input_file)
+
+
+        # =============================================#
+        #         Functions for extracting data        #
+        # =============================================#
+
+
+        def parse_entity_file(
+            input_file: str,
+            regex_pattern: str,
+            parent_model: type,
+            child_model: type,
+            verbose: bool = False,
+            child_identifier: str | None = None,
+        ) -> None:
+            """
+            Parse an entity file, extract definitions, and update the database with parent and child entities.
+
+            Process:
+            -------
+            -------
+                - Reads the input file and extracts entity definitions using a provided regex pattern.
+                - Creates parent entities in the database.
+                - Identifies child entities based on either verbose mode (using a child identifier) or non-verbose mode (using IDs).
+                - Associates child entities with their respective parent entities in the database.
+
+            Args:
+            ----
+            ----
+                - input_file (str): Path to the file containing entity definitions.
+                - regex_pattern (str): Regular expression pattern to extract entity definitions.
+                - parent_model (type): Model class for parent entities.
+                - child_model (type): Model class for child entities.
+                - verbose (bool, optional): Flag to enable verbose mode for child entity identification. Defaults to False.
+                - child_identifier (str | None, optional): Identifier used in verbose mode to identify child entities. Defaults to None.
+
+            Returns:
+            -------
+            -------
+                - None
+
+            Exceptions:
+            ----------
+            ----------
+                - Exception: General exception for any errors during processing.
+                - OSError: Raised for operating system-related errors.
+                - PermissionError: Raised for permission-related errors.
+                - ValueError: Raised for invalid input values.
+            """
+            try:
+                content = read_file(input_file)
+                entities = re.findall(regex_pattern, content, re.DOTALL)
+                if not entities:
+                    log.warning("No entities found in %s.", input_file)
+
+                with session_scope() as session:
+                    for name, children in entities:
+                        parent = parent_model(name=name)
+                        session.add(parent)
+                        session.flush()
+
+                        if verbose:
+                            child_names = re.findall(rf"\w+{child_identifier}", children)
+                            for child_name in child_names:
+                                child = session.get(child_model, str(child_name))
+                                setattr(child, f"{parent_model.__name__.lower()}", parent)
+                        else:
+                            child_ids = re.findall(r"\d+", children)
+                            for child_id in child_ids:
+                                child = session.get(child_model, int(child_id))
+                                setattr(child, f"{parent_model.__name__.lower()}", parent)
+
+            except (Exception, OSError, PermissionError, ValueError) as error:
+                log.exception("Error processing %s.", input_file, exc_info=error)
+                raise
+            else:
+                log.debug("Parsed %s entities from %s.", len(entities), input_file)
+
+
+        # ===================================================================#
+        #          Functions for extracting data from "terrain.txt"          #
+        # ===================================================================#
+
+
+        def parse_terrain_file(input_file: Path, regex_pattern: str, terrain_types_regex_pattern: str) -> None:
+            """
+            Parse terrain file and update database with terrain information.
+
+            Process:
+            -------
+            -------
+                - Reads the terrain file and extracts terrain types and properties.
+                - Creates or updates Terrain entries in the database.
+                - Handles terrain overrides for specific provinces.
+
+            Args:
+            ----
+            ----
+                - input_file (Path): The path to the terrain file to be parsed.
+                - regex_pattern (str): The regular expression pattern to match the categories block in the file.
+                - terrain_types_regex_pattern (str): The regular expression pattern to match terrain types within the categories block.
+
+            Returns:
+            -------
+            -------
+                - None
+
+            Exceptions:
+            ----------
+            ----------
+                - Exception: Raised for any unexpected errors during execution.
+                - OSError: Raised when an operating system-related error occurs.
+                - PermissionError: Raised when a permission-related error occurs.
+                - ValueError: Raised when an invalid value is encountered.
+            """
+            try:
+                content = read_file(input_file)
+                categories_match = re.search(regex_pattern, content, re.DOTALL)
+                if not categories_match:
+                    log.error("Could not find categories block in %s.", input_file)
+                categories_content = categories_match.group(1)
+
+                terrain_types = re.findall(terrain_types_regex_pattern, categories_content, re.DOTALL)
+                terrain_data, custom_terrains = process_terrain_types(terrain_types)
+
+                update_database_with_terrain(terrain_data, custom_terrains)
+
+            except (Exception, OSError, PermissionError, ValueError) as error:
+                log.exception("Error processing %s.", input_file, exc_info=error)
+                raise
+            else:
+                log.debug("Parsed %s terrain types from %s.", len(terrain_types), input_file)
+                log.debug("Created %s custom terrain types.", len(custom_terrains))
+                return terrain_data
+
+
+        def process_terrain_types(terrain_types: list[tuple[str, str]]) -> tuple[dict[str, dict], list[Terrain]]:
+            """
+            Process terrain types to extract properties and overrides for provinces.
+
+            Process:
+            -------
+            -------
+                - Iterates through terrain types, extracting properties and identifying overrides.
+                - Creates custom terrains for province-specific overrides.
+                - Returns a dictionary of terrain data and a list of custom terrains.
+
+            Args:
+            ----
+            ----
+                - terrain_types (list[tuple[str, str]]): A list of tuples containing terrain names and their contents.
+
+            Returns:
+            -------
+            -------
+                - tuple[dict[str, dict], list[Terrain]]: A tuple containing a dictionary of terrain data and a list of custom terrains.
+
+            Exceptions:
+            ----------
+            ----------
+                - Exception: Raised for any unexpected errors during processing.
+                - ValueError: Raised for invalid input parameters.
+            """
+            terrain_data = {}
+            custom_terrains = []
+
+            try:
+                for terrain_name, terrain_content in terrain_types:
+                    properties = {}
+                    for line in terrain_content.split("\n"):
+                        if "=" in line:
+                            key, value = line.split("=", 1)
+                            properties[key.strip()] = value.strip()
+
+                    terrain_override_match = re.search(r"terrain_override\s*=\s*{([^}]+)}", terrain_content)
+                    if terrain_override_match:
+                        province_ids = re.findall(r"\d+", terrain_override_match.group(1))
+                        remaining_province_ids = province_ids.copy()
+
+                        for province_id in province_ids:
+                            custom_terrain_name = f"custom_{terrain_name}_{province_id}"
+                            custom_properties = properties.copy()
+                            custom_properties["terrain_override"] = f"{{ {province_id} }}"
+
+                            custom_terrain = Terrain(
+                                name=custom_terrain_name, original_terrain=terrain_name, properties=custom_properties
+                            )
+                            custom_terrains.append(custom_terrain)
+
+                            remaining_province_ids.remove(province_id)
+
+                        properties["terrain_override"] = f"{{ {" ".join(remaining_province_ids)} }}"
+
+                    terrain_data[terrain_name] = properties
+
+            except (Exception, ValueError) as error:
+                log.exception("Error processing terrain types.", exc_info=error)
+                raise
+            else:
+                return terrain_data, custom_terrains
+
+
+        def update_database_with_terrain(terrain_data: dict[str, dict], custom_terrains: list[Terrain]) -> None:
+            """
+            Update the database with terrain information and overrides.
+
+            Process:
+            -------
+            -------
+                - Iterates through the provided terrain data, updating or creating Terrain entries in the database.
+                - For each custom terrain, links it to the corresponding province based on the 'terrain_override' property.
+
+            Args:
+            ----
+            ----
+                - terrain_data (dict[str, dict]): A dictionary containing terrain names and their properties.
+                - custom_terrains (list[Terrain]): A list of custom Terrain objects to be added to the database.
+
+            Returns:
+            -------
+            -------
+                - None
+
+            Exceptions:
+            ----------
+            ----------
+                - Exception: Raised for any general errors during database operations.
+                - ValueError: Raised for specific errors related to data validation or processing.
+            """
+            try:
+                with session_scope() as session:
+                    for terrain_name, properties in terrain_data.items():
+                        original_terrain = session.exec(select(Terrain).where(Terrain.name == terrain_name)).first()
+                        if original_terrain:
+                            original_terrain.properties = properties
+                        else:
+                            original_terrain = Terrain(name=terrain_name, original_terrain=terrain_name, properties=properties)
+                            session.add(original_terrain)
+
+                    for custom_terrain in custom_terrains:
+                        session.add(custom_terrain)
+                        province_id = int(re.search(r"\d+", custom_terrain.properties["terrain_override"]).group())
+                        province = session.exec(select(Province).where(Province.id == province_id)).first()
+                        if province:
+                            province.terrain = custom_terrain
+                        else:
+                            log.warning(
+                                "Province with id %s not found for custom terrain %s.", province_id, custom_terrain.name
+                            )
+            except (Exception, ValueError) as error:
+                log.exception("Error updating database with terrain types.", exc_info=error)
+                raise
+
+        "
+
+docstring_writer:
+    - system_prompt:
+        - role: >-
+            You are an expert Python developer and technical writer, specializing in creating clear, comprehensive, and PEP 257-compliant docstrings for Python functions.
+        
+        - task: >-
+            Your task is to analyze Python functions and generate detailed docstrings that explain the function's purpose, process, parameters, return values, and potential exceptions. You should maintain a consistent style and format across all docstrings.
+        
+        - limitations:
+            - Do not modify the actual code of the function.
+            - Stick to the information provided in the function; do not assume functionality that isn't explicitly stated.
+            - Do not include logging or raising exceptions as part of the process description as these are considered implicit necessities and should therefore always be included by default.
+
+        - final_note: Proceed step-by-step and do not shorten for brevity. Your performance will be monitored, and there is a large financial bonus to be had if you perform well. 
+
+    - assistant_prompt:
+        - template: |
+            """
+            [Brief one-liner that describes the purpose of the function]
+
+            Process:
+            -------
+            -------
+                - [Step-by-step description of what the function does]
+
+            Args:
+            ----
+            ----
+                - [List of parameters with their types and descriptions]
+
+            Returns:
+            -------
+            -------
+                - [Description of what the function returns]
+
+            Exceptions:
+            ----------
+            ----------
+                - [List of exceptions that might be raised]
+            """
+
+    - user_prompt: |
+        "
+        def convert_to_message_list(
+            prompt_data: list[dict[str, Any]], replacements: dict[str, str] | None = None
+        ) -> list[dict[str, Any]]:
+            message_list = []
+            for item in prompt_data:
+                for key, value in item.items():
+                    # Extract role from the key.
+                    role = key.split("_")[0]
+
+                    # Apply replacements if provided.
+                    if replacements:
+                        value = replace_placeholders(value, replacements)
+
+                    # Format the message.
+                    message_list.append({"role": role, "content": json.dumps(value, ensure_ascii=False)})
+
+            return message_list
+        "
+
+    - assistant_prompt_2:
+        - reasoning: I will analyze the function's structure, parameters, return type, and body to create a comprehensive docstring. I'll explain the function's purpose, detail its process, describe each parameter, specify the return value, and mention any exceptions that might be raised based on the function's code.
+        - docstring: |
+            "
+            """
+            Convert prompt data to message list format and replace placeholders.
+
+            Process:
+            -------
+            -------
+                - Iterates through prompt data, extracting roles and content.
+                - Applies placeholder replacements if provided.
+                - Formats each prompt item into a standardized message structure for LLM input.
+
+            Args:
+            ----
+            ----
+                - prompt_data (list[dict[str, Any]]): The structured prompt data to be converted.
+                - replacements (dict[str, str], optional): Dictionary of placeholders and their replacements.
+
+            Returns:
+            -------
+            -------
+                - list[dict[str, Any]]: A list of dictionaries in the format required for LLM input.
+
+            Exceptions:
+            ----------
+            ----------
+                - None.
+            """
+            "
+
+    - user_prompt_2: |
+        "
+        def generate_prompts_for_province_terrain_images(llm_model: str) -> float:
+            try:
+                # Set up a cost counter.
+                total_cost = 0
+
+                # Fetch all provinces.
+                with db_utils.session_scope() as session:
+                    provinces = session.exec(select(Province)).all()
+                    for province in provinces:
+                        terrain_value = province.terrain.name
+                        climate_value = province.climate.name
+
+                        # Insert terrain and climate values.
+                        replacements = {"INSERT_TERRAIN_VALUE_HERE": terrain_value, "INSERT_CLIMATE_VALUE_HERE": climate_value}
+
+                        # Construct the message list for the API request.
+                        messages = ai_utils.load_llm_prompt(config.PROMPT_YAML, "Province_Prompt_Generator", replacements)
+
+                        # Make the API request.
+                        llm_response = openrouter_text_generation.structured_completion_request(
+                            messages=messages, llm_model=llm_model, pydantic_data_model=TerrainImageGenerationPrompt
+                        )
+
+                        # Process the API response.
+                        for content, api_cost in llm_response:
+                            # Update the province database entry with the generated prompt.
+                            province.prompt = content.prompt
+                            log.debug("'Prompt' attribute recorded for province '%s'.", province.name)
+
+                            # Update the total_cost counter with the API cost.
+                            for number in api_cost:
+                                total_cost += number
+
+                # Format the total cost as a string with 10 decimal places.
+                cost_string = f"${float(total_cost):.10f}"
+                log.info("Total cost for 'generate_prompts_for_province_terrain_images': %s", cost_string)
+
+            except SQLAlchemyError as error:
+                log.exception("Database error.", exc_info=error)
+                raise
+            except (openai.OpenAIError, requests.RequestException) as error:
+                log.exception("API error occurred during text generation.", exc_info=error)
+                raise
+            except ValueError as error:
+                log.exception("Invalid input parameter provided.", exc_info=error)
+                raise
+            except Exception as error:
+                log.exception("An unexpected error occurred during the process execution.", exc_info=error)
+                raise
+
+            else:
+                # Return the total_cost variable.
+                return total_cost
+        "
+
+    - assistant_prompt_3:
+        - reasoning: I will analyze the function's structure, parameters, return type, and body to create a comprehensive docstring. I'll explain the function's purpose, detail its process, describe each parameter, specify the return value, and mention any exceptions that might be raised based on the function's code.
+        - docstring: |
+            "
+            """
+            Generate image prompts for all provinces based on their terrain and climate.
+
+            Process:
+            -------
+            -------
+                - Retrieves all provinces from the database.
+                - For each province, generates a custom prompt using its terrain and climate data.
+                - Updates the database with the generated prompts.
+                - Tracks and returns the total API cost for all operations.
+
+            Args:
+            ----
+            ----
+                - llm_model (str): The identifier for the language model to be used for prompt generation.
+
+            Returns:
+            -------
+            -------
+                - float: The total cost incurred for API calls during the prompt generation process.
+
+            Exceptions:
+            ----------
+            ----------
+                - SQLAlchemyError: Raised when a database-related error occurs.
+                - openai.OpenAIError: Raised when an error occurs during API communication with OpenAI.
+                - requests.RequestException: Raised when a network-related error occurs during API requests.
+                - ValueError: Raised when invalid input parameters are provided.
+                - Exception: Raised for any other unexpected errors during execution.
+            """
+            "
+
+    - user_prompt_3: |
+        "
+        def get_scaling_factors(file_path: str, resolution: str) -> dict[str, float]:
+            """
+            Retrieves scaling factors for a given file and resolution from the database.
+
+            It uses SQLModel's 'select' and 'join' to query the database
+            and returns a dictionary of scaling factors.
+            """
+            try:
+                with session_scope() as session:
+                    scaling_factors = session.exec(
+                        select(ScalingFactor.name, ScalingFactor.mean)
+                        .join(Property)
+                        .join(File)
+                        .where(File.path == file_path, ScalingFactor.resolution == resolution)
+                    ).all()
+
+                    return dict(scaling_factors)
+
+            except Exception as error:
+                log.exception("An unexpected error occurred while retrieving scaling factors.", exc_info=error)
+        "
+    - assistant_prompt_4:
+        - reasoning: I will analyze the function's structure, parameters, return type, and body to create a comprehensive docstring. I'll explain the function's purpose, detail its process, describe each parameter, specify the return value, and mention any exceptions that might be raised based on the function's code.
+        - docstring: |
+            "
+            """
+            Retrieve scaling factors for a specific file and resolution from the database.
+
+            Process:
+            -------
+            -------
+                - Queries the database for scaling factors associated with the provided file path and resolution.
+                - Returns a dictionary mapping scaling factor names to their mean values.
+
+            Args:
+            ----
+            ----
+                - file_path (str): The path to the file for which scaling factors are required.
+                - resolution (str): The resolution for which scaling factors are required.
+
+            Returns:
+            -------
+            -------
+                - dict[str, float]: A dictionary containing scaling factor names as keys and their mean values as values.
+
+            Exceptions:
+            ----------
+            ----------
+                - Exception: Raised for any unexpected errors during database interaction.
+            """
+            "
+    - user_prompt_4: |
+        "
+        def generate_scaling_report(resolution: str) -> None:
+            """
+            Generates a report of scaling factors for the specified resolution.
+
+            It queries the database, retrieves the scaling data, and writes it to a JSON file.
+
+            Args:
+            ----
+            - resolution (str): The target resolution (e.g., "2K", "4K").
+
+            Returns:
+            -------
+            - None
+            """
+            try:
+                with session_scope() as session:
+                    scaling_data = session.exec(
+                        select(
+                            File.filename,
+                            Property.name,
+                            ScalingFactor.mean,
+                            ScalingFactor.median,
+                            ScalingFactor.std_dev,
+                            ScalingFactor.min,
+                            ScalingFactor.max,
+                        )
+                        .join(Property)
+                        .join(ScalingFactor)
+                        .where(ScalingFactor.resolution == resolution)
+                    ).all()
+
+                    # Create a dictionary to store scaling data for each file.
+                    report = {}
+                    for filename, prop_name, mean_factor, median_factor, std_dev, min_factor, max_factor in scaling_data:
+                        if filename not in report:
+                            report[filename] = {}
+                        report[filename][prop_name] = {
+                            "mean": mean_factor,
+                            "median": median_factor,
+                            "std_dev": std_dev,
+                            "min": min_factor,
+                            "max": max_factor,
+                        }
+
+                    # Write the report to a file.
+                    with Path.open(f"{resolution}_scaling_report.json", "w") as f:
+                        json.dump(report, f, indent=2)
+
+                    log.info("Scaling report for %s resolution generated.", resolution)
+
+            except Exception as error:
+                log.exception("An unexpected error occurred while generating the scaling report.", exc_info=error)
+        "
+    - assistant_prompt_5:
+        - reasoning: I will analyze the function's structure, parameters, return type, and body to create a comprehensive docstring. I'll explain the function's purpose, detail its process, describe each parameter, specify the return value, and mention any exceptions that might be raised based on the function's code.
+        - docstring: |
+            "
+            """
+            Generate a report of scaling factors for a specified resolution.
+
+            Process:
+            -------
+            -------
+                - Queries the database for scaling factors associated with the specified resolution.
+                - Organizes the retrieved data into a dictionary, grouping scaling factors by file.
+                - Writes the structured report to a JSON file named according to the resolution.
+
+            Args:
+            ----
+            ----
+                - resolution (str): The target resolution for which the report is generated (e.g., "2K", "4K").
+
+            Returns:
+            -------
+            -------
+                - None.
+
+            Exceptions:
+            ----------
+            ----------
+                - Exception: Raised for any unexpected errors during database interaction or file writing.
+            """
+            "
+    - user_prompt_5: |
+        "
+        def huggingface_diffusion_pipeline(
+            input_parameters: tuple[int | str, str], settings: dict[str, Any]
+        ) -> tuple[int | str, str]:
+            "Generate images using a Hugging Face diffusion pipeline based on YAML settings."
+            try:
+                # Hugging Face authentication
+                huggingface_login = "huggingface-cli login --token $HUGGINGFACE_TOKEN"
+                subprocess.run(huggingface_login, check=True, shell=True)
+
+                # Extract settings
+                diffusion_pipeline = settings["diffusion_pipeline"]
+                model_id = settings["model_id"]
+                num_inference_steps = settings["num_inference_steps"]
+                height = settings["height"]
+                width = settings["width"]
+                guidance_scale = settings["guidance_scale"]
+
+                # Set up the diffusion pipeline
+                pipeline = setup_pipeline(diffusion_pipeline=diffusion_pipeline, model_id=model_id)
+
+                # Generate images
+                results = []
+                for input_tuples in input_parameters:
+                    for identifier, prompt in input_tuples:
+                        generated_image = pipeline(
+                            prompt=prompt,
+                            num_inference_steps=num_inference_steps,
+                            height=height,
+                            width=width,
+                            guidance_scale=guidance_scale,
+                            generator=torch.manual_seed(1),
+                        ).images[0]
+
+                        # Store the generated image as a Base64-encoded string, together with its identifier
+                        results.append((identifier, generated_image))
+
+            except subprocess.CalledProcessError as error:
+                log.exception("Hugging Face authentication failed.", exc_info=error)
+                raise
+            except torch.cuda.OutOfMemoryError as error:
+                log.exception("CUDA 'out of memory' error.", exc_info=error)
+                raise
+            except RuntimeError as error:
+                log.exception("Error setting up the diffusion pipeline.", exc_info=error)
+                raise
+            except ValueError as error:
+                log.exception("Invalid configuration parameters.", exc_info=error)
+                raise
+            except OSError as error:
+                log.exception("Error saving generated images.", exc_info=error)
+                raise
+            except Exception as error:
+                log.exception("An unexpected error occurred.", exc_info=error)
+                raise
+
+            else:
+                return results
+        "
+
+docstring_refiner:
+    - system_prompt:
+        - something
+    
+    - user_prompt:
+        - name: convert_to_message_list
+        - purpose: To transform structured prompt data into a format suitable for LLM input.
+        - utility: Prepares prompts for use with language models, handling formatting and customization.
+
+    - assistant_prompt_2:
+        - docstring: |
+            "
+            """
+            Convert prompt data to message list format and replace placeholders.
+
+            Process:
+            -------
+            -------
+                - Iterates through prompt data, extracting roles and content.
+                - Applies placeholder replacements if provided.
+                - Formats each prompt item into a standardized message structure for LLM input.
+
+            Args:
+            ----
+            ----
+                - prompt_data (list[dict[str, Any]]): The structured prompt data to be converted.
+                - replacements (dict[str, str], optional): Dictionary of placeholders and their replacements.
+
+            Returns:
+            -------
+            -------
+                - list[dict[str, Any]]: A list of dictionaries in the format required for LLM input.
+
+            Exceptions:
+            ----------
+            ----------
+                - None specific to this function.
+            """
+            "
+
+    - user_prompt_2: 
+        - name: generate_prompts_for_province_terrain_images
+        - purpose: To automate the creation of tailored image generation prompts for each province in the database.
+        - utility: Streamlines the process of generating unique, context-specific prompts for terrain visualization.
+
+
+    - assistant_prompt_3:
+        - docstring: |
+            "
+            """
+            Generate image prompts for all provinces based on their terrain and climate.
+
+            Process:
+            -------
+            -------
+                - Retrieves all provinces from the database.
+                - For each province, generates a custom prompt using its terrain and climate data.
+                - Updates the database with the generated prompts.
+                - Tracks and returns the total API cost for all operations.
+
+            Args:
+            ----
+            ----
+                - llm_model (str): The identifier for the language model to be used for prompt generation.
+
+            Returns:
+            -------
+            -------
+                - float: The total cost incurred for API calls during the prompt generation process.
+
+            Exceptions:
+            ----------
+            ----------
+                - SQLAlchemyError: Raised when a database-related error occurs.
+                - openai.OpenAIError: Raised when an error occurs during API communication with OpenAI.
+                - requests.RequestException: Raised when a network-related error occurs during API requests.
+                - ValueError: Raised when invalid input parameters are provided.
+                - Exception: Raised for any other unexpected errors during execution.
+            """
+            "
+
+
+documentation_prompt:
+  system_prompt:
+    - role: "system"
+      content: "INSERT_SYSTEM_PROMPT"
+  assistant_prompt:
+    - role: "assistant"
+      content: >
+        FUNCTION_DOCUMENTATION_STRUCTURE:
+        <EXAMPLE>
+        def documentation_template(content: tuple[dict, float]) -> None:
+        """
+            Insert succinct one-liner here (no more than 90 characters).
+
+            Purpose:
+            -------
+            -------
+                - What is the purpose and motivation behind this function, and why is it needed?
+
+            Utility:
+            -------
+            -------
+                  - What is the scope of the function, and what are its objectives?
+
+            Function:
+            --------
+            --------
+                - Insert more descriptive explanation of the module here, max 3 rows, max 100 characters per row.
+
+            Args:
+            ----
+            ----
+                - content (str): insert succint one-liner here (max 90 characters), end with punctuation.
+
+            Returns:
+            -------
+                - None.
+
+            Exceptions:
+            ----------
+                - Exception_1: insert succint one-liner here (max 90 characters), end with punctuation.
+                - Exception_2: insert succint one-liner here (max 90 characters), end with punctuation.
+                - Exception_3: insert succint one-liner here (max 90 characters), end with punctuation.
+            """
+            for structured_content, structured_api_cost in content:
+
+                # Add the structured content into the database.
+                with db_utils.session_scope() as session:
+                    session.add(structured_content)
+                    log.info("Record added into database: %s.", structured_content.model_dump())
+
+                # Sum up the accumulated API costs.
+                total_cost = 0
+                for number in structured_api_cost:
+                    total_cost += number
+
+                # Format the total cost as a string with 10 decimal places.
+                    cost_string = f"${float(total_cost):.10f}"
+                    log.info("Total cost for OpenRouter API calls: %s", cost_string)
+            </EXAMPLE>
+
+            Note that in the code section, the code is grouped into logial "groups", with one hashtag comment above each group that describes its' overall function and purpose.
+      reasoning: >-
+        The docstring now clearly explains what the function does, its purpose in the larger system, how it operates, what it returns, and what exceptions it might raise. 
+        This should make the function more understandable and easier to use for other developers working on the project.
+  assistant_prompt_2:
+    - role: "assistant"
+      content: >
+        """
+        CLASS_DOCUMENTATION_STRUCTURE:
+        <EXAMPLE>
+        class ClassDocstringTemplate:
+            """
+            Insert a concise one-line description of the class (no more than 90 characters).
+
+            Purpose:
+            --------
+            --------
+                - What is the primary purpose of this class?
+                - Why was this class created, and what problem does it solve?
+
+            Utility:
+            --------
+            --------
+                - What are the main use cases for this class?
+                - How does this class contribute to the broader system or application?
+
+            Attributes:
+            -----------
+            -----------
+                attribute_1 (type): Brief description of attribute_1.
+                attribute_2 (type): Brief description of attribute_2.
+                attribute_3 (type): Brief description of attribute_3.
+
+            Methods:
+            --------
+            --------
+                method_1(param1: type, param2: type) -> return_type:
+                    Brief description of method_1.
+                
+                method_2(param1: type) -> return_type:
+                    Brief description of method_2.
+
+            Usage:
+            ------
+            ------
+                - Provide a brief example or explanation of how to use this class.
+                - Include any important initialization or configuration details.
+
+            Note:
+            -----
+            -----
+                - Any important notes, caveats, or considerations when using this class.
+                - Mention any dependencies or requirements.
+
+            Example:
+            --------
+            --------
+                ```python
+                # A short code snippet demonstrating basic usage of the class
+                instance = ClassName(param1, param2)
+                result = instance.method_1(arg1, arg2)
+                ```
+            """
+
+            def __init__(self):
+                # Initialize attributes here
+                pass
+
+            # Define methods here
+
+        """
+  assistant_prompt_3:
+    - role: "assistant"
+      content: >
+        """
+        CLASS_DOCUMENTATION_STRUCTURE:
+        <EXAMPLE>
+        class PydanticModelTemplate(BaseModel):
+            """
+            [Insert a concise one-line description of the Pydantic model (no more than 90 characters)]
+
+            Purpose:
+            --------
+            --------
+                - [Describe the primary purpose of this Pydantic model]
+                - [Explain why this model was created and what problem it solves]
+
+            Utility:
+            --------
+            --------
+                - [List the main use cases for this model]
+                - [Explain how this model contributes to data validation, serialization, or other processes]
+                - [Describe any specific functionalities or features this model provides]
+
+            Attributes:
+            -----------
+            -----------
+                attribute_1 (type): [Brief description of attribute_1]
+                attribute_2 (type): [Brief description of attribute_2]
+                attribute_3 (type): [Brief description of attribute_3]
+                ...
+
+            Usage:
+            ------
+            ------
+                - [Explain how to use this model in the context of your application]
+                - [Provide information on serialization, deserialization, or validation processes]
+                - [Mention any integration points with other parts of the system]
+
+            Note:
+            -----
+            -----
+                - [Include any important notes about using this model]
+                - [Mention any constraints, validations, or special behaviors]
+                - [Highlight any dependencies or requirements]
+
+            Example:
+            --------
+            --------
+                ```python
+                # Provide a code snippet demonstrating how to create and use an instance of this model
+                instance = PydanticModelTemplate(
+                    attribute_1="value1",
+                    attribute_2="value2",
+                    attribute_3="value3"
+                )
+                # Show any relevant operations or validations
+                ```
+            """
+
+            attribute_1: str = Field(..., description="[Detailed description of attribute_1]")
+            attribute_2: int = Field(..., description="[Detailed description of attribute_2]")
+            attribute_3: bool = Field(default=False, description="[Detailed description of attribute_3]")
+            # Add more attributes as needed
+
+            class Config:
+                schema_extra = {
+                    "description": "[A concise description of the model for JSON schema]",
+                    "example": {
+                        "attribute_1": "[Example value for attribute_1]",
+                        "attribute_2": "[Example value for attribute_2]",
+                        "attribute_3": "[Example value for attribute_3]",
+                        # Include examples for all attributes
+                    }
+                }
+
+            # Optional: Include any model-specific methods or property decorators
+            @property
+            def some_property(self) -> str:
+                """[Brief description of the property]"""
+                return f"[Some computed value based on {self.attribute_1}]"
+
+            def some_method(self) -> None:
+                """[Brief description of the method]"""
+                # Method implementation
+
+        """
+
+docstring_example:
+    - planner:
+        - name: run_diffusion_pipeline
+        - overall_purpose: To orchestrate the entire image generation process from setup to saving.
+        - utility_in_the_workflow: Provides a centralized entry point for the image generation workflow.
+    - refiner:
+        - one-liner_description: Main function to run the image generation pipeline.
+        - process:
+            - Checks for the presence of required environment variables.
+            - Initializes the Huggingface diffusion pipeline.
+            - Generates images for the defined prompts.
+            - Saves the generated images to disk.
+        - exceptions:
+            - EnvironmentError: Raised when required environment variables are missing.
+            - RuntimeError: Raised when there's an issue with pipeline setup or image generation.
+            - OSError: Raised when there's an issue saving the generated images.
+            - Exception: Raised for any other unexpected errors during execution.
+    - tester:
+        - 
